@@ -1109,6 +1109,9 @@ void DecoderTableBuilder::emitBinaryParser(raw_ostream &OS, indent Indent,
     if (IgnoreNonDecodableOperands)
       return;
     assert(!OpInfo.Decoder.empty());
+    // The operand has no encoding, so the corresponding argument is omitted.
+    // This avoids confusion and allows the function to be overloaded if the
+    // operand does have an encoding in other instructions.
     OS << Indent << "if (!Check(S, " << OpInfo.Decoder << "(MI, Decoder)))\n"
        << Indent << "  return MCDisassembler::Fail;\n";
     return;
@@ -1117,6 +1120,8 @@ void DecoderTableBuilder::emitBinaryParser(raw_ostream &OS, indent Indent,
   if (OpInfo.Fields.empty() && OpInfo.InitValue && IgnoreFullyDefinedOperands)
     return;
 
+  // We need to construct the encoding of the operand from pieces if it is not
+  // encoded sequentially or has a non-zero constant part in the encoding.
   bool UseInsertBits = OpInfo.numFields() > 1 || OpInfo.InitValue.value_or(0);
 
   if (UseInsertBits) {
@@ -1989,6 +1994,19 @@ static void addOneOperandFields(const Record *EncodingDef, const BitsInit &Bits,
     }
   }
 
+  // Find out where the variable bits of the operand are encoded.
+  // The bits don't have to be consecutive or in ascending order.
+  // For example, an operand could be encoded as follows:
+  //
+  //  7    6      5      4    3    2      1    0
+  // {1, op{5}, op{2}, op{1}, 0, op{4}, op{3}, ?}
+  //
+  // In this example the operand is encoded in three segments:
+  //
+  //           Base Width Offset
+  // op{2...1}   4    2     1
+  // op{4...3}   1    2     3
+  // op{5}       6    1     5
   for (unsigned I = 0, J = 0; I != Bits.getNumBits(); I = J) {
     const VarInit *Var;
     unsigned Offset = 0;
